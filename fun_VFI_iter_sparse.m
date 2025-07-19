@@ -1,9 +1,10 @@
-function [Policy] = fun_VFI_iter_indexing(V0,pi_z,N_a,N_z,ReturnMatrix,...
+function [Policy] = fun_VFI_iter_sparse(V0,pi_z,N_a,N_z,ReturnMatrix,...
     DiscountFactorParamsVec,Tolerance,maxhowards,H)
 
 %% First, Howards iteration, with H iterations, using index
 VKron=V0;
 
+tic;
 % Setup specific to Howard iterations
 % H=80; % number of Howards iterations
 pi_z_howards=repelem(pi_z,N_a,1);
