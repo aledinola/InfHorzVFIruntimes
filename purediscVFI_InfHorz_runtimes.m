@@ -1,3 +1,5 @@
+clear,clc,close all
+addpath(genpath('C:\Users\aledi\Documents\GitHub\VFIToolkit-matlab'))
 % Do pure discretized VFI for simply problem
 % If n_z=2, this is the model of Rendahl (2022)
 % Otherwise, is roughly the same value fn problem as Aiyagari (1994) [minor differences]
@@ -35,22 +37,9 @@ n_a=5;
 n_z=2;
 
 % Parameters
-Params.gamma=3; % CRRA coeff in preferences
-Params.beta=1.03^(-1/4); % discount rate, is over 0.99
-Params.delta=0.025; % separation rate (paper says 0.1, but Rendahl's matlab says 0.025; guess the 0.1 was annual)
-Params.phi=0.9; % job finding rate
-Params.alpha=0.33; % capital share of output
-Params.mu=0.4; % replacement rate
-Params.r=0.0073; % interest rate [what Rendahl has in eqm]
-
-%% Set up the exogenous shock process
-z_gridvals=[0;1];
-pi_z=[1-Params.phi, Params.phi; Params.delta, 1-Params.delta];
-% exogenous labor model, so we know that L is
-Params.L=Params.phi/(Params.phi+Params.delta); % Rendahl calls this 'n', eqn comes from top of pg 4
-% and since tax is on earnings, we can balance the gov budget without solving model, just setting
-Params.tau=Params.mu*(1-Params.L)/(Params.L+Params.mu*(1-Params.L)); % Rendahl has this eqn on pg 10, nearish bottom
-
+Params.gamma = 2; % CRRA coeff in preferences
+Params.beta  = 0.96; % discount rate, is over 0.99
+Params.r     = 0.04; % interest rate [what Rendahl has in eqm]
 
 %% Grids
 d_grid=[]; %There is no d variable
@@ -61,11 +50,7 @@ a_grid=Params.amax*linspace(0,1,n_a)'; % evenly spaced, not a good idea
 %%
 DiscountFactorParamNames={'beta'};
 
-if n_z==2
-    ReturnFn=@(aprime, a, z,r,alpha,delta,mu,tau,gamma) Rendahl2022_ReturnFn(aprime, a, z,r,alpha,delta,mu,tau,gamma);
-else
-    ReturnFn=@(aprime, a, z,r,alpha,delta,tau,gamma) Rendahl2022mod_ReturnFn(aprime, a, z,r,alpha,delta,tau,gamma);
-end
+ReturnFn = @(aprime,a,z,r,w,gamma) IFP_ReturnFn(aprime,a,z,r,w,gamma);
 % The first inputs must be: next period endogenous state, endogenous state, exogenous state. Followed by any parameters
 
 vfoptions=struct();
@@ -74,126 +59,32 @@ Tolerance=10^(-9);
 maxiter=Inf;
 maxhowards=500; % just a safety valve on max number of times to do Howards, not sure it is needed for anything?
 
-%% Loop to get average runtimes
-% Loop over some N_a sizes
-% Loop over some N_z sizes
-% Loop over some H (number of howards iterations to perform
-N_a_vec=[100,200,500];
-N_z_vec=[2,5,10,15,20,25]; % at 2 greedy-Howards is better, at 25 Howards-iter is better, looking for cross-over (and if cross-over differs by n_a)
-H_vec=[20,40,60,80,100,150,200];
+%% Fix N_a and N_z
 
-setuptimes=zeros(length(N_a_vec),length(N_z_vec),length(H_vec));
-runtimes=zeros(length(N_a_vec),length(N_z_vec),length(H_vec),3);
-counter=zeros(length(N_a_vec),length(N_z_vec),length(H_vec),3);
-checkzero=zeros(length(N_a_vec),length(N_z_vec),length(H_vec),2); % should be zeros as all three Howards give same solution: 1st is the two different iter, 2 is the first iter vs greedy
+fprintf('Currently doing n_a=%d, n_z=%d \n',n_a,n_z)
 
-for a_c=1:length(N_a_vec)
-    n_a=N_a_vec(a_c);
-    for z_c=1:length(N_z_vec)
-        n_z=N_z_vec(z_c);
+a_grid=gpuArray(a_grid);
+z_gridvals=gpuArray(z_gridvals);
+pi_z=gpuArray(pi_z);
 
-        % a_c=length(N_a_vec)
-        % z_c=length(N_z_vec)
+DiscountFactorParamsVec=Params.beta;
+ReturnFnParamNames=ReturnFnParamNamesFn(ReturnFn,n_d,n_a,n_z,0,vfoptions,Params);
+ReturnFnParamsVec=CreateVectorFromParams(Params, ReturnFnParamNames);
 
-        if n_z==2
-            ReturnFn=@(aprime, a, z,r,alpha,delta,mu,tau,gamma) Rendahl2022_ReturnFn(aprime, a, z,r,alpha,delta,mu,tau,gamma);
-        else
-            ReturnFn=@(aprime, a, z,r,alpha,delta,tau,gamma) Rendahl2022mod_ReturnFn(aprime, a, z,r,alpha,delta,tau,gamma);
-        end
+ReturnMatrix=CreateReturnFnMatrix_Case1_Disc_nod_Par2(ReturnFn, n_a, n_z, a_grid, z_gridvals, ReturnFnParamsVec);
 
-        if n_z==2
-            z_gridvals=[0;1];
-            pi_z=[1-Params.phi, Params.phi; Params.delta, 1-Params.delta];
-        else
-            z_gridvals=linspace(0.5,1.5,n_z)';
-            pi_z=rand(n_z,n_z);
-            pi_z=pi_z+eye(n_z,n_z);
-            pi_z=pi_z./sum(pi_z,2); % normalize rows to one
-        end
-        a_grid=Params.amax*linspace(0,1,n_a)'; % evenly spaced, not a good idea
+N_a=prod(n_a);
+N_z=prod(n_z);
 
-        for h_c=1:length(H_vec)
-            H=H_vec(h_c); % number of Howards iterations
+pi_z_alt=shiftdim(pi_z',-1);
 
-            fprintf('Currently doing a_c=%i, z_c=%i, h_c=%i \n',a_c,z_c,h_c)
+addindexforaz=gpuArray(N_a*(0:1:N_a-1)'+N_a*N_a*(0:1:N_z-1));
 
+V0=zeros(N_a,N_z,'gpuArray');
 
+           
 
-            %% First, just some copy-paste of toolkit internals to get things setup
-            tic;
-
-            a_grid=gpuArray(a_grid);
-            z_gridvals=gpuArray(z_gridvals);
-            pi_z=gpuArray(pi_z);
-
-            DiscountFactorParamsVec=Params.beta;
-            ReturnFnParamNames=ReturnFnParamNamesFn(ReturnFn,n_d,n_a,n_z,0,vfoptions,Params);
-            ReturnFnParamsVec=CreateVectorFromParams(Params, ReturnFnParamNames);
-
-            ReturnMatrix=CreateReturnFnMatrix_Case1_Disc_nod_Par2(ReturnFn, n_a, n_z, a_grid, z_gridvals, ReturnFnParamsVec);
-
-            N_a=prod(n_a);
-            N_z=prod(n_z);
-
-            pi_z_alt=shiftdim(pi_z',-1);
-
-            addindexforaz=gpuArray(N_a*(0:1:N_a-1)'+N_a*N_a*(0:1:N_z-1));
-
-            V0=zeros(N_a,N_z,'gpuArray');
-
-            setuptime=toc;
-
-            %% First, Howards iteration, with H iterations, using index
-            VKron=V0;
-
-            tic;
-            % Setup specific to Howard iterations
-            % H=80; % number of Howards iterations
-            pi_z_howards=repelem(pi_z,N_a,1);
-
-            tempcounter1=1;
-            currdist=Inf;
-            while currdist>Tolerance && tempcounter1<=maxiter
-                VKronold=VKron;
-
-                % Calc the condl expectation term (except beta), which depends on z but not on control variables
-                EV=VKronold.*pi_z_alt;
-                EV(isnan(EV))=0; % multilications of -Inf with 0 gives NaN, this replaces them with zeros (as the zeros come from the transition probabilites)
-                EV=sum(EV,2); % sum over z', leaving a singular second dimension
-
-                entireRHS=ReturnMatrix+DiscountFactorParamsVec*EV; %aprime by a by z
-
-                %Calc the max and it's index
-                [VKron,Policy]=max(entireRHS,[],1);
-                VKron=shiftdim(VKron,1); % a by z
-
-                VKrondist=VKron(:)-VKronold(:);
-                VKrondist(isnan(VKrondist))=0;
-                currdist=max(abs(VKrondist));
-
-                % Use Howards Policy Fn Iteration Improvement (except for first few and last few iterations, as it is not a good idea there)
-                if isfinite(currdist) && currdist/Tolerance>10 && tempcounter1<maxhowards
-                    tempmaxindex=shiftdim(Policy,1)+addindexforaz; % aprime index, add the index for a and z
-                    Ftemp=reshape(ReturnMatrix(tempmaxindex),[N_a,N_z]); % keep return function of optimal policy for using in Howards
-                    Policy=Policy(:); % a by z (this shape is just convenient for Howards)
-
-                    for Howards_counter=1:H
-                        EVKrontemp=VKron(Policy,:);
-                        EVKrontemp=EVKrontemp.*pi_z_howards;
-                        EVKrontemp(isnan(EVKrontemp))=0;
-                        EVKrontemp=reshape(sum(EVKrontemp,2),[N_a,N_z]);
-                        VKron=Ftemp+DiscountFactorParamsVec*EVKrontemp;
-                    end
-                end
-
-                tempcounter1=tempcounter1+1;
-
-            end
-
-            Policy=reshape(Policy,[N_a,N_z]);
-
-            Rendahltest1=toc;
-
+            
             clear pi_z_howards
 
             % [setuptime,Rendahltest1]
@@ -201,64 +92,7 @@ for a_c=1:length(N_a_vec)
 
             VKron_Hiter=VKron;
 
-            %% Second, Howards iteration, with H iterations, using sparse matrix
-            VKron=V0;
-
-            tic;
-            % Setup specific to Howard iterations
-            % H=80; % number of Howards iterations
-            pi_z_howards2=shiftdim(pi_z',-1);
-
-            aind=(1:1:N_a)';
-            zind=0:1:N_z-1; % already contains -1
-            azind=aind+N_a*zind;
-
-            tempcounter2=1;
-            currdist=Inf;
-            while currdist>Tolerance && tempcounter2<=maxiter
-                VKronold=VKron;
-
-                % Calc the condl expectation term (except beta), which depends on z but not on control variables
-                EV=VKronold.*pi_z_alt;
-                EV(isnan(EV))=0; % multilications of -Inf with 0 gives NaN, this replaces them with zeros (as the zeros come from the transition probabilites)
-                EV=sum(EV,2); % sum over z', leaving a singular second dimension
-
-                entireRHS=ReturnMatrix+DiscountFactorParamsVec*EV; % aprime by a by z
-
-                %Calc the max and it's index
-                [VKron,Policy]=max(entireRHS,[],1);
-                VKron=shiftdim(VKron,1); % a by z
-
-                VKrondist=VKron(:)-VKronold(:);
-                VKrondist(isnan(VKrondist))=0;
-                currdist=max(abs(VKrondist));
-
-                % Use Howards Policy Fn Iteration Improvement (except for first few and last few iterations, as it is not a good idea there)
-                if isfinite(currdist) && currdist/Tolerance>10 && tempcounter2<maxhowards
-                    % Get the return matrix F() for the current policy
-                    tempmaxindex=shiftdim(Policy,1)+addindexforaz; % aprime index, add the index for a and z
-                    Ftemp=reshape(ReturnMatrix(tempmaxindex),[N_a*N_z,1]); % keep return function of optimal policy for using in Howards
-                    indp = shiftdim(Policy,1)+N_a*zind;
-                    Q = sparse(azind(:),indp(:),1,N_a*N_z,N_a*N_z); % policy as mapping from (a,z) to (a',z)
-                    % OR        Q = sparse(azind,indp,1,N_a*N_z,N_a*N_z); % policy as mapping from (a,z) to (a',z)
-                    for Howards_counter=1:H
-                        EVKrontemp=VKron.*pi_z_howards2; % switch from V on (a',z') to EV on (a',z)
-                        EVKrontemp(isnan(EVKrontemp))=0;
-                        EVKrontemp=reshape(sum(EVKrontemp,2),[N_a*N_z,1]);
-                        VKron=Ftemp+DiscountFactorParamsVec*Q*EVKrontemp; % Q*EV, moves EV from (a',z) to (a,z)
-                        VKron=reshape(VKron,[N_a,N_z]); % a by z
-                    end
-                end
-
-                tempcounter2=tempcounter2+1;
-
-            end
-            Policy=reshape(Policy,[N_a,N_z]);
-
-            Rendahltest2=toc;
-
-            clear pi_z_howards2
-
+            
             % [setuptime,Rendahltest2]
             % tempcounter2
 
