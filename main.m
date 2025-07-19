@@ -38,6 +38,7 @@ vfoptions=struct();
 Tolerance=10^(-9);
 maxiter=10000;
 maxhowards=500; % just a safety valve on max number of times to do Howards, not sure it is needed for anything?
+H = 80;
 
 %% Fix N_a and N_z
 
@@ -57,29 +58,28 @@ ReturnMatrix=CreateReturnFnMatrix_Case1_Disc_nod_Par2(ReturnFn, n_a, n_z, a_grid
 N_a=prod(n_a);
 N_z=prod(n_z);
 
-pi_z_alt=shiftdim(pi_z',-1);
-
-addindexforaz=gpuArray(N_a*(0:1:N_a-1)'+N_a*N_a*(0:1:N_z-1));
-
 V0=zeros(N_a,N_z,'gpuArray');
 
 %% Method 1: Howard with iterations, indexing
 
 tic
 [Policy1] = fun_VFI_iter_indexing(V0,pi_z,N_a,N_z,ReturnMatrix,...
-    DiscountFactorParamsVec,Tolerance,maxhowards,H);
-time1=toc
+    DiscountFactorParamsVec,Tolerance,maxiter,maxhowards,H);
+time1=toc;
 
 %% Method 2: Howard with iterations, sparse matrix
 
 tic
 [Policy2] = fun_VFI_iter_sparse(V0,pi_z,N_a,N_z,ReturnMatrix,...
-    DiscountFactorParamsVec,Tolerance,maxhowards,H);
-time2=toc
+    DiscountFactorParamsVec,Tolerance,maxiter,maxhowards,H);
+time2=toc;
 
-err = max(abs(Policy2-Policy1))
+err = max(abs(Policy2-Policy1),[],"all");
 
-
+disp('RUNNING TIMES')
+fprintf('fun_VFI_iter_indexing: %f \n',time1)
+fprintf('fun_VFI_iter_sparse:   %f \n',time2)
+fprintf('err:   %f \n',err)
 
 
 

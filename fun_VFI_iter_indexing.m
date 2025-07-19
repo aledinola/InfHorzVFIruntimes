@@ -1,12 +1,13 @@
 function [Policy] = fun_VFI_iter_indexing(V0,pi_z,N_a,N_z,ReturnMatrix,...
-    DiscountFactorParamsVec,Tolerance,maxhowards,H)
+    DiscountFactorParamsVec,Tolerance,maxiter,maxhowards,H)
 
 %% First, Howards iteration, with H iterations, using index
 VKron=V0;
 
-% Setup specific to Howard iterations
-% H=80; % number of Howards iterations
+% Precomputations
+pi_z_alt=shiftdim(pi_z',-1);
 pi_z_howards=repelem(pi_z,N_a,1);
+addindexforaz=gpuArray(N_a*(0:1:N_a-1)'+N_a*N_a*(0:1:N_z-1));
 
 tempcounter1=1;
 currdist=Inf;
@@ -37,7 +38,6 @@ while currdist>Tolerance && tempcounter1<=maxiter
         for Howards_counter=1:H
             EVKrontemp=VKron(Policy,:);
             EVKrontemp=EVKrontemp.*pi_z_howards;
-            EVKrontemp(isnan(EVKrontemp))=0;
             EVKrontemp=reshape(sum(EVKrontemp,2),[N_a,N_z]);
             VKron=Ftemp+DiscountFactorParamsVec*EVKrontemp;
         end
