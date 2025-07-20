@@ -74,12 +74,22 @@ tic
     DiscountFactorParamsVec,Tolerance,maxiter,maxhowards,H);
 time2=toc;
 
-err = max(abs(Policy2-Policy1),[],"all");
+%% Method 3: Howard greedy with bigcstab
+tic
+[Policy3] = fun_VFI_iter_bicgstab(V0,pi_z,N_a,N_z,ReturnMatrix,...
+    DiscountFactorParamsVec,Tolerance,maxiter,maxhowards,H);
+time3=toc;
+
+
+err2 = max(abs(Policy2-Policy1),[],"all");
+err3 = max(abs(Policy3-Policy1),[],"all");
 
 disp('RUNNING TIMES')
 fprintf('fun_VFI_iter_indexing: %f \n',time1)
 fprintf('fun_VFI_iter_sparse:   %f \n',time2)
-fprintf('err:   %f \n',err)
+fprintf('fun_VFI_iter_bicgstab: %f \n',time3)
+fprintf('err2:   %f \n',err2)
+fprintf('err3:   %f \n',err3)
 
 
 
